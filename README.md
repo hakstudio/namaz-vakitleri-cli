@@ -1,6 +1,6 @@
 # Namaz Vakitleri CLI
 
-Diyanet İşleri Başkanlığı verilerini kullanarak terminal üzerinden namaz vakitlerini görüntüleyen bir araçtır.
+Diyanet İşleri Başkanlığı verilerini kullanarak terminal üzerinden namaz vakitlerini görüntüleyen, veritabanı içine gömülü tek dosyadan oluşan taşınabilir bir araçtır.
 
 ## Kurulum
 
@@ -77,5 +77,5 @@ Programı ve tüm yapılandırma dosyalarını sisteminizden tamamen kaldırmak 
 ## Teşekkür ve Lisans
 
 - Bu proje GPL-2.0 lisansı ile korunmaktadır.
-- Yerel veritabanı (`yerler.json`), [erdemarslan/namazvakti](https://github.com/erdemarslan/namazvakti) projesinden temin edilmiştir. Katkıları için teşekkür ederiz.
+- Uygulama içerisine sıkıştırılarak gömülen konum veritabanı, [erdemarslan/namazvakti](https://github.com/erdemarslan/namazvakti) reposundaki `db/yerler.ndb` dosyasından alınarak dönüştürülmüştür. Katkıları için teşekkür ederiz.
 
