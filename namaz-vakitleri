@@ -22,8 +22,7 @@ from pathlib import Path
 # Yapılandırma
 CONFIG_DIR = Path.home() / ".config" / "namaz-vakitleri"
 CONFIG_FILE = CONFIG_DIR / "config.json"
-DB_FILE = CONFIG_DIR / "yerler.json"
-DB_URL = "https://raw.githubusercontent.com/erdemarslan/namazvakti/refs/heads/master/db/yerler.ndb"
+DB_FILE = Path(__file__).parent / "yerler.json"
 
 def slugify(s):
     if not s: return ""
@@ -33,19 +32,15 @@ def slugify(s):
         s = s.replace(old, new)
     return re.sub(r'[^a-z0-9\s]', '', s).strip()
 
-def download_db():
-    if not DB_FILE.exists():
-        print("Lütfen bekleyin, veritabanı hazırlanıyor...")
-        try:
-            CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-            res = requests.get(DB_URL, timeout=20, verify=False)
-            if res.status_code == 200:
-                with open(DB_FILE, 'w') as f:
-                    f.write(res.text)
-        except Exception: return None
+def load_db():
     try:
+        if not DB_FILE.exists():
+            print(f"Hata: Veritabanı dosyası bulunamadı ({DB_FILE})")
+            return None
         with open(DB_FILE, 'r') as f: return json.load(f)
-    except: return None
+    except Exception as e:
+        print(f"Hata: Veritabanı okunamadı: {e}")
+        return None
 
 def find_location_id(db, country, state, city):
     c_slug, s_slug, ci_slug = slugify(country), slugify(state), slugify(city)
@@ -163,10 +158,10 @@ def fetch_times(city_id, label):
     return False
 
 def main():
-    db = download_db()
-    if not db: return
     args = sys.argv[1:]
     if len(args) == 3:
+        db = load_db()
+        if not db: return
         country, state, city = args
         city_id = find_location_id(db, country, state, city)
         if city_id:
