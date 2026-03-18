@@ -1,0 +1,187 @@
+#!/usr/bin/env python3
+import os
+import sys
+import time
+from datetime import datetime, timedelta
+
+# SSL ve uyarıları sustur
+os.environ['PYTHONWARNINGS'] = 'ignore'
+try:
+    import warnings
+    warnings.filterwarnings("ignore")
+    import urllib3
+    urllib3.disable_warnings()
+except:
+    pass
+
+import json
+import requests
+import re
+from pathlib import Path
+
+# Yapılandırma
+CONFIG_DIR = Path.home() / ".config" / "namaz-vakitleri"
+CONFIG_FILE = CONFIG_DIR / "config.json"
+DB_FILE = CONFIG_DIR / "yerler.json"
+DB_URL = "https://raw.githubusercontent.com/erdemarslan/namazvakti/refs/heads/master/db/yerler.ndb"
+
+def slugify(s):
+    if not s: return ""
+    s = str(s).lower()
+    rep = {'ı': 'i', 'İ': 'i', 'ü': 'u', 'ö': 'o', 'ş': 's', 'ç': 'c', 'ğ': 'g', 'â': 'a'}
+    for old, new in rep.items():
+        s = s.replace(old, new)
+    return re.sub(r'[^a-z0-9\s]', '', s).strip()
+
+def download_db():
+    if not DB_FILE.exists():
+        print("Lütfen bekleyin, veritabanı hazırlanıyor...")
+        try:
+            CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+            res = requests.get(DB_URL, timeout=20, verify=False)
+            if res.status_code == 200:
+                with open(DB_FILE, 'w') as f:
+                    f.write(res.text)
+        except Exception: return None
+    try:
+        with open(DB_FILE, 'r') as f: return json.load(f)
+    except: return None
+
+def find_location_id(db, country, state, city):
+    c_slug, s_slug, ci_slug = slugify(country), slugify(state), slugify(city)
+    for c_id, c_data in db.items():
+        if slugify(c_data['ulke_adi']) == c_slug:
+            for s_id, s_data in c_data.get('sehirler', {}).items():
+                if slugify(s_data['sehir_adi']) == s_slug:
+                    for ilce_id, ilce_adi in s_data.get('ilceler', {}).items():
+                        if slugify(ilce_adi) == ci_slug: return ilce_id
+    return None
+
+def get_countdown_text(seconds):
+    hours = seconds // 3600
+    minutes = (seconds % 3600) // 60
+    secs = seconds % 60
+    parts = []
+    if hours > 0: parts.append(f"{hours} saat")
+    if minutes > 0: parts.append(f"{minutes} dk")
+    if seconds < 60 or (hours == 0 and minutes < 10): parts.append(f"{secs} sn")
+    return " ".join(parts)
+
+def fetch_times(city_id, label):
+    # Diyanet web sitesine erişmek için daha güçlü başlıklar kullanıyoruz
+    url = f"https://namazvakitleri.diyanet.gov.tr/tr-TR/{city_id}"
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+        'Accept-Language': 'tr-TR,tr;q=0.9,en-US;q=0.8,en;q=0.7',
+        'Referer': 'https://namazvakitleri.diyanet.gov.tr/',
+        'Cache-Control': 'max-age=0'
+    }
+    
+    try:
+        res = requests.get(url, headers=headers, timeout=25, verify=False)
+        if res.status_code != 200:
+            print(f"Hata: Sunucu {res.status_code} hatası döndürdü.")
+            return False
+            
+        content = res.text
+        extracted = {}
+        
+        # 1. Regex: JavaScript Değişkenleri (var _imsakTime = "HH:mm";)
+        patterns = {
+            "İmsak": r'_imsakTime\s*=\s*"(\d{2}:\d{2})"',
+            "Güneş": r'_gunesTime\s*=\s*"(\d{2}:\d{2})"',
+            "Öğle": r'_ogleTime\s*=\s*"(\d{2}:\d{2})"',
+            "İkindi": r'_ikindiTime\s*=\s*"(\d{2}:\d{2})"',
+            "Akşam": r'_aksamTime\s*=\s*"(\d{2}:\d{2})"',
+            "Yatsı": r'_yatsiTime\s*=\s*"(\d{2}:\d{2})"'
+        }
+        for name, p in patterns.items():
+            m = re.search(p, content)
+            if m: extracted[name] = m.group(1)
+
+        # 2. Regex: HTML div (tpt-time)
+        if len(extracted) < 6:
+            times_html = re.findall(r'<div class="tpt-time"[^>]*>(\d{2}:\d{2})</div>', content)
+            if len(times_html) >= 6:
+                labels = ["İmsak", "Güneş", "Öğle", "İkindi", "Akşam", "Yatsı"]
+                for i in range(6): extracted[labels[i]] = times_html[i]
+
+        if len(extracted) >= 6:
+            now = datetime.now()
+            vakit_list = []
+            for name, t_str in extracted.items():
+                try:
+                    v_time = datetime.strptime(t_str, "%H:%M").replace(year=now.year, month=now.month, day=now.day)
+                    vakit_list.append((name, v_time))
+                except: continue
+            
+            # Yarınki İmsak'ı yakala (Gece yarısından sonrası için)
+            next_imsak_match = re.search(r'var nextImsakTime = "(\d{2}:\d{2})";', content)
+            if next_imsak_match:
+                tomorrow = now + timedelta(days=1)
+                vakit_list.append(("İmsak (Yarın)", datetime.strptime(next_imsak_match.group(1), "%H:%M").replace(year=tomorrow.year, month=tomorrow.month, day=tomorrow.day)))
+
+            vakit_list.sort(key=lambda x: x[1])
+            
+            target_name, target_time = None, None
+            for name, v_time in vakit_list:
+                if v_time > now:
+                    target_name, target_time = name, v_time
+                    break
+            
+            # Eğer bugünkü tüm vakitler geçtiyse yarına bak
+            if not target_name:
+                tomorrow = now + timedelta(days=1)
+                target_name = "İmsak (Yarın)"
+                # Varsayılan olarak listedeki ilk eleman (İmsak) yarın için de yakındır
+                target_time = vakit_list[0][1] + timedelta(days=1)
+
+            if target_name:
+                diff = int((target_time - datetime.now()).total_seconds())
+                if diff <= 60 and diff > 0:
+                    try:
+                        while diff > 0:
+                            sys.stdout.write(f"\r{target_name} vaktine {diff} saniye kaldı...   ")
+                            sys.stdout.flush()
+                            time.sleep(1)
+                            diff = int((target_time - datetime.now()).total_seconds())
+                        print(f"\r{target_name} vakti girdi!                ")
+                    except KeyboardInterrupt: print("\n")
+                elif diff > 0:
+                    print(f"\n{target_name} vaktine {get_countdown_text(diff)} kaldı.")
+
+            print(f"\n--- {label.upper()} VAKİTLERİ ---")
+            for k, v in extracted.items():
+                print(f"{k:<8}: {v}")
+            print("-" * 30 + "\n")
+            return True
+        else:
+            print("Hata: Vakit bilgileri çekilemedi. Site yapısı değişmiş veya erişim engellenmiş olabilir.")
+    except Exception as e:
+        print(f"Bağlantı hatası: {e}")
+    return False
+
+def main():
+    db = download_db()
+    if not db: return
+    args = sys.argv[1:]
+    if len(args) == 3:
+        country, state, city = args
+        city_id = find_location_id(db, country, state, city)
+        if city_id:
+            CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+            with open(CONFIG_FILE, 'w') as f:
+                json.dump({"country": country, "state": state, "city": city, "id": city_id}, f)
+            fetch_times(city_id, city)
+        else:
+            print(f"Hata: Konum bulunamadı ({country}/{state}/{city})")
+    elif len(args) == 0 and CONFIG_FILE.exists():
+        with open(CONFIG_FILE, 'r') as f:
+            c = json.load(f)
+            fetch_times(c['id'], c['city'])
+    else:
+        print("Kullanım: namaz-vakitleri <ülke> <eyalet/il> <şehir/ilçe>")
+
+if __name__ == "__main__":
+    main()
