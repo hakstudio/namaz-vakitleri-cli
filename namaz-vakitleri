@@ -962,7 +962,7 @@ def get_countdown_text(seconds):
     if seconds < 60 or (hours == 0 and minutes < 10): parts.append(f"{secs} sn")
     return " ".join(parts)
 
-def fetch_times(city_id, label):
+def fetch_times(city_id, label, cookies=None):
     # Diyanet web sitesine erişmek için daha güçlü başlıklar kullanıyoruz
     url = f"https://namazvakitleri.diyanet.gov.tr/tr-TR/{city_id}"
     headers = {
@@ -974,12 +974,13 @@ def fetch_times(city_id, label):
     }
     
     try:
-        res = requests.get(url, headers=headers, timeout=25, verify=False)
+        res = requests.get(url, headers=headers, cookies=cookies, timeout=25, verify=False)
         if res.status_code != 200:
             print(f"Hata: Sunucu {res.status_code} hatası döndürdü.")
             return False
             
         content = res.text
+        # ... rest of the extraction logic
         extracted = {}
         
         # 1. Regex: JavaScript Değişkenleri (var _imsakTime = "HH:mm";)
@@ -1057,8 +1058,37 @@ def fetch_times(city_id, label):
         print(f"Bağlantı hatası: {e}")
     return False
 
+def get_browser_cookies(browser_name):
+    try:
+        import browser_cookie3
+        if browser_name.lower() == 'chrome':
+            return browser_cookie3.chrome(domain_name='diyanet.gov.tr')
+        elif browser_name.lower() == 'safari':
+            return browser_cookie3.safari(domain_name='diyanet.gov.tr')
+        elif browser_name.lower() == 'firefox':
+            return browser_cookie3.firefox(domain_name='diyanet.gov.tr')
+    except ImportError:
+        print("Bilgi: Tarayıcı çerezlerini okumak için 'browser-cookie3' kütüphanesi gerekli.")
+        print("Kurmak için: pip install browser-cookie3")
+    except Exception as e:
+        print(f"Uyarı: Çerezler okunamadı: {e}")
+    return None
+
 def main():
     args = sys.argv[1:]
+    
+    cookies = None
+    if '--use-cookie' in args:
+        idx = args.index('--use-cookie')
+        if idx + 1 < len(args):
+            browser = args[idx + 1]
+            cookies = get_browser_cookies(browser)
+            # Argümanları temizle ki konum aramayı bozmasın
+            args = args[:idx] + args[idx+2:]
+        else:
+            print("Hata: --use-cookie parametresinden sonra tarayıcı adı belirtilmelidir (chrome/safari/firefox).")
+            return
+
     if len(args) == 3:
         db = load_db()
         if not db: return
@@ -1068,15 +1098,15 @@ def main():
             CONFIG_DIR.mkdir(parents=True, exist_ok=True)
             with open(CONFIG_FILE, 'w') as f:
                 json.dump({"country": country, "state": state, "city": city, "id": city_id}, f)
-            fetch_times(city_id, city)
+            fetch_times(city_id, city, cookies=cookies)
         else:
             print(f"Hata: Konum bulunamadı ({country}/{state}/{city})")
     elif len(args) == 0 and CONFIG_FILE.exists():
         with open(CONFIG_FILE, 'r') as f:
             c = json.load(f)
-            fetch_times(c['id'], c['city'])
+            fetch_times(c['id'], c['city'], cookies=cookies)
     else:
-        print("Kullanım: namaz-vakitleri <ülke> <eyalet/il> <şehir/ilçe>")
+        print("Kullanım: namaz-vakitleri <ülke> <eyalet/il> <şehir/ilçe> [--use-cookie chrome|safari|firefox]")
 
 if __name__ == "__main__":
     main()
